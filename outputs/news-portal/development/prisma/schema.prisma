@@ -1,0 +1,319 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  reviewer
+  editor
+  moderator
+  reader
+}
+
+enum UserStatus {
+  active
+  pending_verification
+  suspended
+  deleted
+}
+
+enum ArticleStatus {
+  draft
+  in_review
+  approved
+  published
+  archived
+}
+
+enum CommentStatus {
+  active
+  flagged
+  removed
+  pending_review
+}
+
+enum NotificationType {
+  breaking_news
+  comment_reply
+  editorial_state
+  system
+}
+
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  email           String    @unique @db.VarChar(255)
+  passwordHash    String?   @map("password_hash") @db.VarChar(255)
+  displayName     String    @map("display_name") @db.VarChar(50)
+  avatarUrl       String?   @map("avatar_url") @db.VarChar(500)
+  bio             String?
+  role            UserRole  @default(reader)
+  status          UserStatus @default(pending_verification)
+  emailVerified   Boolean   @default(false) @map("email_verified")
+  mfaEnabled      Boolean   @default(false) @map("mfa_enabled")
+  preferences     Json      @default("{}")
+  loginAttempts   Int       @default(0) @map("login_attempts")
+  lockedUntil     DateTime? @map("locked_until")
+  oauthProvider   String?   @map("oauth_provider") @db.VarChar(50)
+  oauthId         String?   @map("oauth_id") @db.VarChar(255)
+  consentGivenAt  DateTime? @map("consent_given_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  articles         Article[]         @relation("AuthorArticles")
+  reviewedArticles Article[]         @relation("ReviewerArticles")
+  revisions        ArticleRevision[]
+  comments         Comment[]
+  commentVotes     CommentVote[]
+  mediaAssets      MediaAsset[]
+  bookmarks        Bookmark[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  analyticsEvents  AnalyticsEvent[]
+
+  @@unique([oauthProvider, oauthId])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Article {
+  id               String        @id @default(uuid()) @db.Uuid
+  title            String        @db.VarChar(200)
+  slug             String        @unique @db.VarChar(250)
+  subtitle         String?       @db.VarChar(300)
+  body             String
+  excerpt          String?       @db.VarChar(250)
+  featuredImageId  String?       @map("featured_image_id") @db.Uuid
+  authorId         String        @map("author_id") @db.Uuid
+  categoryId       String        @map("category_id") @db.Uuid
+  status           ArticleStatus @default(draft)
+  publishedAt      DateTime?     @map("published_at")
+  scheduledAt      DateTime?     @map("scheduled_at")
+  isBreaking       Boolean       @default(false) @map("is_breaking")
+  commentsEnabled  Boolean       @default(true) @map("comments_enabled")
+  viewCount        Int           @default(0) @map("view_count")
+  metaTitle        String?       @map("meta_title") @db.VarChar(60)
+  metaDescription  String?       @map("meta_description") @db.VarChar(160)
+  reviewerId       String?       @map("reviewer_id") @db.Uuid
+  reviewFeedback   String?       @map("review_feedback")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+  deletedAt        DateTime?     @map("deleted_at")
+
+  author          User            @relation("AuthorArticles", fields: [authorId], references: [id])
+  reviewer        User?           @relation("ReviewerArticles", fields: [reviewerId], references: [id])
+  category        Category        @relation(fields: [categoryId], references: [id])
+  featuredImage   MediaAsset?     @relation(fields: [featuredImageId], references: [id])
+  tags            ArticleTag[]
+  revisions       ArticleRevision[]
+  comments        Comment[]
+  bookmarks       Bookmark[]
+  analyticsEvents AnalyticsEvent[]
+
+  @@index([categoryId, status, publishedAt(sort: Desc)])
+  @@index([authorId, status])
+  @@index([status, scheduledAt])
+  @@index([publishedAt(sort: Desc)])
+  @@index([isBreaking, publishedAt(sort: Desc)])
+  @@map("articles")
+}
+
+model Category {
+  id           String     @id @default(uuid()) @db.Uuid
+  name         String     @db.VarChar(100)
+  slug         String     @unique @db.VarChar(120)
+  description  String?
+  parentId     String?    @map("parent_id") @db.Uuid
+  displayOrder Int        @default(0) @map("display_order")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  articles Article[]
+
+  @@index([parentId])
+  @@index([displayOrder])
+  @@map("categories")
+}
+
+model Tag {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String       @unique @db.VarChar(50)
+  slug      String       @unique @db.VarChar(60)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  articles  ArticleTag[]
+
+  @@map("tags")
+}
+
+model ArticleTag {
+  articleId String @map("article_id") @db.Uuid
+  tagId     String @map("tag_id") @db.Uuid
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, tagId])
+  @@index([tagId])
+  @@map("article_tags")
+}
+
+model ArticleRevision {
+  id             String   @id @default(uuid()) @db.Uuid
+  articleId      String   @map("article_id") @db.Uuid
+  body           String
+  editorId       String   @map("editor_id") @db.Uuid
+  revisionNumber Int      @map("revision_number")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  editor  User    @relation(fields: [editorId], references: [id])
+
+  @@index([articleId, revisionNumber(sort: Desc)])
+  @@map("article_revisions")
+}
+
+model Comment {
+  id           String        @id @default(uuid()) @db.Uuid
+  articleId    String        @map("article_id") @db.Uuid
+  authorId     String        @map("author_id") @db.Uuid
+  parentId     String?       @map("parent_id") @db.Uuid
+  body         String
+  upvotes      Int           @default(0)
+  downvotes    Int           @default(0)
+  status       CommentStatus @default(active)
+  flaggedReason String?      @map("flagged_reason") @db.VarChar(100)
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  article  Article       @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  author   User          @relation(fields: [authorId], references: [id])
+  parent   Comment?      @relation("CommentTree", fields: [parentId], references: [id])
+  replies  Comment[]     @relation("CommentTree")
+  votes    CommentVote[]
+
+  @@index([articleId, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@index([status])
+  @@index([parentId])
+  @@map("comments")
+}
+
+model CommentVote {
+  userId    String   @map("user_id") @db.Uuid
+  commentId String   @map("comment_id") @db.Uuid
+  value     Int      @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id])
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@id([userId, commentId])
+  @@map("comment_votes")
+}
+
+model MediaAsset {
+  id           String   @id @default(uuid()) @db.Uuid
+  filename     String   @db.VarChar(255)
+  originalName String   @map("original_name") @db.VarChar(255)
+  mimeType     String   @map("mime_type") @db.VarChar(100)
+  sizeBytes    BigInt   @map("size_bytes")
+  url          String   @db.VarChar(500)
+  thumbnailUrl String?  @map("thumbnail_url") @db.VarChar(500)
+  altText      String?  @map("alt_text") @db.VarChar(255)
+  width        Int?
+  height       Int?
+  uploadedBy   String   @map("uploaded_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  uploader User      @relation(fields: [uploadedBy], references: [id])
+  articles Article[]
+
+  @@index([uploadedBy])
+  @@index([mimeType])
+  @@index([createdAt(sort: Desc)])
+  @@map("media_assets")
+}
+
+model Bookmark {
+  userId    String   @map("user_id") @db.Uuid
+  articleId String   @map("article_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id])
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, articleId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("bookmarks")
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(200)
+  body      String?
+  link      String?          @db.VarChar(500)
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, read, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(50)
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String   @map("entity_id") @db.Uuid
+  changes    Json?
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  articleId String?  @map("article_id") @db.Uuid
+  eventType String   @map("event_type") @db.VarChar(50)
+  userId    String?  @map("user_id") @db.Uuid
+  sessionId String   @map("session_id") @db.VarChar(100)
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  article Article? @relation(fields: [articleId], references: [id])
+  user    User?    @relation(fields: [userId], references: [id])
+
+  @@index([articleId, eventType, createdAt])
+  @@index([createdAt])
+  @@map("analytics_events")
+}
+
+model NewsletterSubscriber {
+  id             String    @id @default(uuid()) @db.Uuid
+  email          String    @unique @db.VarChar(255)
+  confirmed      Boolean   @default(false)
+  token          String    @unique @db.VarChar(255)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  unsubscribedAt DateTime? @map("unsubscribed_at")
+
+  @@map("newsletter_subscribers")
+}
